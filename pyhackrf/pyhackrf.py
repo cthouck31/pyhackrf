@@ -421,6 +421,9 @@ class HackRf(object):
         Returns:
             Status code from 'libhackrf'.
         """
+        if self.is_streaming():
+            self.stop_rx_mode()
+
         ret = libhackrf.hackrf_close(self.device)
         if ret == HackRfError.HACKRF_SUCCESS:
             self.is_open = False
@@ -430,7 +433,7 @@ class HackRf(object):
 
         return ret
 
-    def start_rx_mode(self, set_callback):
+    def start_rx_mode(self, set_callback, obj=None):
         """
         Register RX callback function.
 
@@ -441,6 +444,8 @@ class HackRf(object):
 
                 int (*callback)(hackrf_transfer *transfer);
 
+            obj (ctypes.c_void_p): Void pointer to object used in callback, if desired (default = None).
+
         Returns:
             Status code from 'libhackrf'.
         """
@@ -449,7 +454,7 @@ class HackRf(object):
             return HackRfError.HACKRF_ERROR
 
         self.callback = _hackrf_callback(set_callback)
-        ret = libhackrf.hackrf_start_rx(self.device, self.callback, None)
+        ret = libhackrf.hackrf_start_rx(self.device, self.callback, obj)
         if ret == HackRfError.HACKRF_SUCCESS:
             logger.debug('Successfully started HackRf in Receive Mode.')
         else:

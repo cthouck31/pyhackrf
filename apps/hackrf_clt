@@ -3,6 +3,11 @@
 from pyhackrf import pyhackrf
 from pyhackrf.pyhackrf import (HackRfError, HackRfVendorRequest,
                                HackRfConstants, HackRfTransceiverMode)
+
+import numpy as np
+
+from threading import Thread
+
 import time
 import ctypes
 import signal
@@ -14,28 +19,30 @@ logging.basicConfig()
 logger = logging.getLogger("HackRF CLT")
 logger.setLevel(logging.DEBUG)
 
-#hackrf = pyhackrf.HackRf()
-#
-#if hackrf.is_open == False:
-#    hackrf.setup()
-#    hackrf.set_freq(93.1e6)
-#    hackrf.set_sample_rate(1e6)
-#    hackrf.set_amp_enable(False)
-#    hackrf.set_lna_gain(16)
-#    hackrf.set_vga_gain(20)    
-#
-#def callback_fun(hackrf_transfer):
-#    array_type = (ctypes.c_byte*hackrf_transfer.contents.valid_length)
-#    values = ctypes.cast(hackrf_transfer.contents.buffer, ctypes.POINTER(array_type)).contents
-#    #iq data here
-#    iq = hackrf.packed_bytes_to_iq(values)
-#    print len(iq)
-#    return 0
-#
-#hackrf.start_rx_mode(callback_fun)
-#
-#while 1:
-#    time.sleep(1)
+
+class Measurement(ctypes.Structure):
+    _fields_ = \
+        [
+            ("value", ctypes.c_float),
+            ("count", ctypes.c_uint),
+        ]
+
+
+def callback_power_measurement(hackrf_transfer):
+    arrayType = (ctypes.c_byte * hackrf_transfer.contents.valid_length)
+    values = ctypes.cast(hackrf_transfer.contents.buffer, ctypes.POINTER(arrayType)).contents
+    iq = np.empty(len(values)//2, 'complex')
+    iq.real, iq.imag = values[::2], values[1::2]
+    iq /= 128.0
+
+    power = np.sum(np.power(np.abs(iq), 2)) / len(iq)
+
+    ptrPowerVal = ctypes.cast(hackrf_transfer.contents.rx_ctx, ctypes.POINTER(Measurement))
+    ptrPowerVal.contents.value += power
+    ptrPowerVal.contents.count += 1
+
+    return 0
+
 
 class HackRfCLT(cmd.Cmd):
     def preloop(self):
@@ -300,6 +307,43 @@ class HackRfCLT(cmd.Cmd):
             if ret != HackRfError.HACKRF_SUCCESS:
                 logger.error("Failed to set parameter.")
 
+    def do_measure_power(self, line):
+        """
+        Measure power observed at front-end for certain time.
+
+            measure_power <time>
+
+        Args:
+            time (float): Number of seconds over which to perform measurement (default = 3).
+        """
+        args = self.__parseLine(line)
+        if len(args) == 0:
+            # Default time.
+            timeDur = 3
+        elif len(args) > 1:
+            logger.warning("Incorrect number of arguments (0 or 1 argument required).")
+            return
+        else:
+            # User-defined time.
+            timeDur = self.__convertFloat(args[0])
+            if timeDur <= 0:
+                logger.error("Duratin must be >= 0 [sec].")
+                return
+
+        self.__printline("Starting power measurement (%.2f [sec])..." % timeDur)
+        powerMeas = Measurement()
+        powerMeas.value = 0
+        powerMeas.count = 0
+        self.hackrf.start_rx_mode(callback_power_measurement,
+                                  obj=ctypes.cast(ctypes.byref(powerMeas), ctypes.c_void_p))
+
+        # Allow callback to run for 'N' seconds.
+        time.sleep(timeDur)
+        # Compute average power.
+        avgPower = powerMeas.value / powerMeas.count
+
+        self.__printline("Power: %.3f [dB] (%u [meas])" % (10*np.log10(avgPower), powerMeas.count))
+        self.hackrf.stop_rx_mode()
 
 if __name__ == "__main__":
 
