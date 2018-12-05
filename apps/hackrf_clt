@@ -47,14 +47,48 @@ def callback_power_measurement(hackrf_transfer):
 class HackRfCLT(cmd.Cmd):
     def preloop(self):
         self.prompt = "hackrf-clt $> "
-
         self.hackrf = pyhackrf.HackRf()
+
+        self.reset()
 
     def postloop(self):
         self.hackrf.exit()
 
     def default(self, line):
         pass
+
+    def reset(self):
+        """
+        Reset to initial conditions.
+        Allows the device to be configured from a known point.
+        """
+
+        if self.hackrf.is_streaming():
+            self.hackrf.stop_rx_mode()
+
+        self._freq      = 10e6
+        self._rate      = 1e6
+        self._lnaGain   = 0.0
+        self._vgaGain   = 0.0
+        self._txVgaGain = 0.0
+
+        success = HackRfError.HACKRF_SUCCESS
+
+        if self.hackrf.set_freq(self._freq) != success:
+            logger.error("Failed to reset RF Frequency.")
+            self._freq = -1
+        if self.hackrf.set_sample_rate(self._rate) != success:
+            logger.error("Failed to reset Sample Rate.")
+            self._rate = -1
+        if self.hackrf.set_lna_gain(self._lnaGain) != success:
+            logger.error("Failed to reset LNA Gain.")
+            self._lnaGain = -1
+        if self.hackrf.set_vga_gain(self._vgaGain) != success:
+            logger.error("Failed to reset RX VGA GAin.")
+            self._vgaGain = -1
+        if self.hackrf.set_txvga_gain(self._txVgaGain) != success:
+            logger.error("Failed to reset TX VGA Gain.")
+            self._txVgaGain = -1
 
     def do_exit(self, line):
         """
@@ -90,6 +124,10 @@ class HackRfCLT(cmd.Cmd):
         Private print function.
         """
         print "    %s" % line
+
+    ############################################################
+    # Control functions.
+    #############################################################
 
     def do_setup(self, line):
         """
@@ -165,6 +203,9 @@ class HackRfCLT(cmd.Cmd):
             ret = self.hackrf.set_freq(freq)
             if ret != HackRfError.HACKRF_SUCCESS:
                 logger.error("Failed to set parameter.")
+                return
+
+            self._freq = freq
 
     def do_set_sample_rate(self, line):
         """
@@ -187,6 +228,9 @@ class HackRfCLT(cmd.Cmd):
             ret = self.hackrf.set_sample_rate(value)
             if ret != HackRfError.HACKRF_SUCCESS:
                 logger.error("Failed to set parameter.")
+                return
+
+            self._rate = value
 
 
     def do_set_lna_gain(self, line):
@@ -210,6 +254,9 @@ class HackRfCLT(cmd.Cmd):
             ret = self.hackrf.set_lna_gain(value)
             if ret != HackRfError.HACKRF_SUCCESS:
                 logger.error("Failed to set parameter.")
+                return
+
+            self._lnaGain = value
 
     def do_set_vga_gain(self, line):
         """
@@ -232,6 +279,9 @@ class HackRfCLT(cmd.Cmd):
             ret = self.hackrf.set_vga_gain(value)
             if ret != HackRfError.HACKRF_SUCCESS:
                 logger.error("Failed to set parameter.")
+                return
+
+            self._vgaGain = value
 
     def do_set_txvga_gain(self, line):
         """
@@ -252,6 +302,9 @@ class HackRfCLT(cmd.Cmd):
             ret = self.hackrf.set_txvga_gain(value)
             if ret != HackRfError.HACKRF_SUCCESS:
                 logger.error("Failed to set parameter.")
+                return
+
+            self._txVgaGain = value
 
     def do_antenna_enable(self, line):
         """
@@ -307,14 +360,31 @@ class HackRfCLT(cmd.Cmd):
             if ret != HackRfError.HACKRF_SUCCESS:
                 logger.error("Failed to set parameter.")
 
+    def do_get_config(self, line):
+        """
+        Print current HackRF configuration.
+
+            get_config
+        """
+        print ("HackRF Configuration:\n")
+        print ("   RF Frequency:   %.3f [kHz]" % (self._freq*1e-3))
+        print ("   Sample Rate:    %.3f [MHz]" % (self._rate*1e-6))
+        print ("   LNA Gain:       %.1f [dB]" % (self._lnaGain))
+        print ("   RX VGA Gain:    %.1f [dB]" % (self._vgaGain))
+        print ("   TX VGA Gain:    %.1f [dB]" % (self._txVgaGain))
+
+    ############################################################
+    # Test functions.
+    #############################################################
+
     def do_measure_power(self, line):
         """
-        Measure power observed at front-end for certain time.
+        Measure power observed at front-end with current configuration.
 
             measure_power <time>
 
         Args:
-            time (float): Number of seconds over which to perform measurement (default = 3).
+            time (float): Number of seconds over which to perform measurement (<60) (default = 3).
         """
         args = self.__parseLine(line)
         if len(args) == 0:
@@ -326,8 +396,8 @@ class HackRfCLT(cmd.Cmd):
         else:
             # User-defined time.
             timeDur = self.__convertFloat(args[0])
-            if timeDur <= 0:
-                logger.error("Duratin must be >= 0 [sec].")
+            if (timeDur <= 0) or (timeDur > 60):
+                logger.error("Duration must be > 0 and <= 60 seconds.")
                 return
 
         self.__printline("Starting power measurement (%.2f [sec])..." % timeDur)
