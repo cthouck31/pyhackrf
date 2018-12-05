@@ -19,6 +19,11 @@ __PKG_REQS__ =\
         'libfftw3-dev'
     ]
 
+__SCRIPTS__ =\
+    [
+        'apps/hackrf_clt'
+    ]
+
 
 class libhackrfInstall(install):
     def run(self):
@@ -70,6 +75,7 @@ setup(
     version=__VERSION__,
     packages=[__NAME__],
     install_requires=__REQS__,
+    scripts=__SCRIPTS__,
     cmdclass=\
         {
             'install': libhackrfInstall,

@@ -1,0 +1,308 @@
+#!/usr/bin/env python
+
+from pyhackrf import pyhackrf
+from pyhackrf.pyhackrf import (HackRfError, HackRfVendorRequest,
+                               HackRfConstants, HackRfTransceiverMode)
+import time
+import ctypes
+import signal
+import argparse
+import cmd
+import logging
+
+logging.basicConfig()
+logger = logging.getLogger("HackRF CLT")
+logger.setLevel(logging.DEBUG)
+
+#hackrf = pyhackrf.HackRf()
+#
+#if hackrf.is_open == False:
+#    hackrf.setup()
+#    hackrf.set_freq(93.1e6)
+#    hackrf.set_sample_rate(1e6)
+#    hackrf.set_amp_enable(False)
+#    hackrf.set_lna_gain(16)
+#    hackrf.set_vga_gain(20)    
+#
+#def callback_fun(hackrf_transfer):
+#    array_type = (ctypes.c_byte*hackrf_transfer.contents.valid_length)
+#    values = ctypes.cast(hackrf_transfer.contents.buffer, ctypes.POINTER(array_type)).contents
+#    #iq data here
+#    iq = hackrf.packed_bytes_to_iq(values)
+#    print len(iq)
+#    return 0
+#
+#hackrf.start_rx_mode(callback_fun)
+#
+#while 1:
+#    time.sleep(1)
+
+class HackRfCLT(cmd.Cmd):
+    def preloop(self):
+        self.prompt = "hackrf-clt $> "
+
+        self.hackrf = pyhackrf.HackRf()
+
+    def postloop(self):
+        self.hackrf.exit()
+
+    def default(self, line):
+        pass
+
+    def do_exit(self, line):
+        """
+        Exit the HackRf command line tool.
+
+            exit
+
+        """
+        return True
+
+    def __parseLine(self, line, delim=" "):
+        """
+        Parse a line into a list.
+        """
+        args = line.rstrip(delim).lstrip(delim).split(delim)
+        args = [arg for arg in args if (arg not in [" ",""])]
+        return args
+
+    def __convertFloat(self, line):
+        """
+        Convert to a float.
+        """
+        try:
+            value = float(line)
+        except Exception as e:
+            logger.error("Failed to convert to float.")
+            value = -1
+
+        return value
+
+    def __printline(self, line):
+        """
+        Private print function.
+        """
+        print "    %s" % line
+
+    def do_setup(self, line):
+        """
+        Setup the HackRf device (set up on entry, only use this if the device was closed).
+
+            setup
+        """
+        if self.hackrf.setup() != HackRfError.HACKRF_SUCCESS:
+            logger.error("Failed to setup device.")
+
+
+    def do_open(self, line):
+        """
+        Open the HackRf device.
+
+            open
+        """
+        ret = self.hackrf.open()
+        if ret != HackRfError.HACKRF_SUCCESS:
+            logger.error("Failed to open device.")
+
+    def do_board_id_read(self, line):
+        """
+        Get board ID from device.
+
+            board_id_read
+        """
+        bid = self.hackrf.board_id_read()
+        if bid < 0:
+            logger.warning("Failed to retrieve board ID.")
+            return
+
+        self.__printline("Board ID: %s" % bid)
+
+    def do_version_string_read(self, line):
+        """
+        Get version string from board.
+
+            version_string_read
+        """
+        vstring = self.hackrf.version_string_read()
+        if vstring is None:
+            logger.warning("Failed to retrieve version string.")
+            return
+
+        self.__printline("Version String: %s" % vstring)
+
+    def do_is_streaming(self, line):
+        """
+        Check if device is currently streaming IQ.
+
+            is_streaming
+        """
+        streaming = self.hackrf.is_streaming()
+        self.__printline("Streaming: %s" % str(streaming))
+
+    def do_set_freq(self, line):
+        """
+        Set front-end RF frequency (in Hz).
+
+            set_freq <freq_hz>
+
+        Args:
+            freq_hz (float): Desired frequency to tune to in [Hz].
+        """
+        args = self.__parseLine(line)
+        if len(args) != 1:
+            logger.warning("Incorrect number of arguments (%d != 1)." % len(args))
+            return
+
+        freq = self.__convertFloat(args[0])
+        if freq >= 0:
+            ret = self.hackrf.set_freq(freq)
+            if ret != HackRfError.HACKRF_SUCCESS:
+                logger.error("Failed to set parameter.")
+
+    def do_set_sample_rate(self, line):
+        """
+        Set sample rate of device (in Hz).
+
+            set_sample_rate <rate>
+
+        Args:
+            rate (float): Desired sample rate (in Hz).
+                          Converted from 'float' to 'int' in this function for
+                          compatibility with 'libhackrf' call.
+        """
+        args = self.__parseLine(line)
+        if len(args) != 1:
+            logger.warning("Incorrect number of arguments (%d != 1)." % len(args))
+            return
+
+        value = self.__convertFloat(args[0])
+        if value >= 0:
+            ret = self.hackrf.set_sample_rate(value)
+            if ret != HackRfError.HACKRF_SUCCESS:
+                logger.error("Failed to set parameter.")
+
+
+    def do_set_lna_gain(self, line):
+        """
+        Set the LNA (low-noise amplifier) gain (in dB).
+
+            set_lna_gain <gain>
+
+        Args:
+            gain (float): Front-end LNA gain desired (range: 0-40 [dB] in 8 [dB] steps).
+                          Rounded to closest 8 [dB] step and converted from 'float' to
+                          'int' for compatibility with 'libhackrf' call.
+        """
+        args = self.__parseLine(line)
+        if len(args) != 1:
+            logger.warning("Incorrect number of arguments (%d != 1)." % len(args))
+            return
+
+        value = self.__convertFloat(args[0])
+        if value >= 0:
+            ret = self.hackrf.set_lna_gain(value)
+            if ret != HackRfError.HACKRF_SUCCESS:
+                logger.error("Failed to set parameter.")
+
+    def do_set_vga_gain(self, line):
+        """
+        Set the RX VGA (variable-gain amplifier) gain (in dB).
+
+            set_vga_gain <gain>
+
+        Args:
+            gain (float): VGA gain desired (range: 0-62 [dB] in 2 [dB] steps).
+                          Rounded to closest 2 [dB] step and converted from 'float' to
+                          'int' for compatibility with 'libhackrf' call.
+        """
+        args = self.__parseLine(line)
+        if len(args) != 1:
+            logger.warning("Incorrect number of arguments (%d != 1)." % len(args))
+            return
+
+        value = self.__convertFloat(args[0])
+        if value >= 0:
+            ret = self.hackrf.set_vga_gain(value)
+            if ret != HackRfError.HACKRF_SUCCESS:
+                logger.error("Failed to set parameter.")
+
+    def do_set_txvga_gain(self, line):
+        """
+        Set the TX VGA (variable-gain amplifier) gain (in dB).
+
+        Args:
+            gain (float): TX VGA gain desired (range: 0-47 [dB] in 1 [dB] steps).
+                          Rounded to closest 1 [dB] step and converted from 'float' to
+                          'int' for compatibility with 'libhackrf' call.
+        """
+        args = self.__parseLine(line)
+        if len(args) != 1:
+            logger.warning("Incorrect number of arguments (%d != 1)." % len(args))
+            return
+
+        value = self.__convertFloat(args[0])
+        if value >= 0:
+            ret = self.hackrf.set_txvga_gain(value)
+            if ret != HackRfError.HACKRF_SUCCESS:
+                logger.error("Failed to set parameter.")
+
+    def do_antenna_enable(self, line):
+        """
+        Set antenna enable flag.
+
+            antenna_enable
+        """
+        ret = self.hackrf.set_antenna_enable(True)
+
+    def do_antenna_disable(self, line):
+        """
+        Unset antenna enable flag.
+
+            antenna_disable
+        """
+        ret = self.hackrf.set_antenna_enable(False)
+
+    def do_amp_enable(self, line):
+        """
+        Set external amplifier enable flag.
+
+            amp_enable
+        """
+        ret = self.hackrf.set_amp_enable(True)
+
+    def do_amp_disable(self, line):
+        """
+        Unset external amplifier enable flag.
+
+            amp_disable
+        """
+        ret = self.hackrf.set_amp_enable(False)
+
+    def do_set_baseband_filter_bw(self, line):
+        """
+        Set baseband filter bandwidth (in Hz).
+
+            set_baseband_filter_bw <bw_hz>
+
+        Args:
+            bw_hz (float): Filter bandwidth (in Hz).
+                           Converted from 'float' to 'int' in this function for
+                           compatibility with 'libhackrf' call.
+        """
+        args = self.__parseLine(line)
+        if len(args) != 1:
+            logger.warning("Incorrect number of arguments (%d != 1)." % len(args))
+            return
+
+        value = self.__convertFloat(args[0])
+        if value >= 0:
+            ret = self.hackrf.set_baseband_filter_bandwidth(value)
+            if ret != HackRfError.HACKRF_SUCCESS:
+                logger.error("Failed to set parameter.")
+
+
+if __name__ == "__main__":
+
+    cmdLine = HackRfCLT()
+
+    cmdLine.cmdloop()
