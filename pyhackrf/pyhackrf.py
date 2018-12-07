@@ -2,6 +2,8 @@ from ctypes import *
 import logging
 import os
 import numpy as np
+import time
+from Queue import Queue
 
 import logging
 logging.basicConfig()
@@ -16,6 +18,9 @@ try:
 except ImportError:
     logger.debug("Could not import \'izip\' from \'itertools\', using \'zip\'.")
     izip = zip
+
+# Dictionary containing all HackRF boards.
+_hackrfDict = {}
 
 # Get opened shared library.
 libhackrf = LIBHACKRF_SO
@@ -341,6 +346,29 @@ libhackrf.hackrf_compute_baseband_filter_bw.restype = c_uint32
 libhackrf.hackrf_compute_baseband_filter_bw.argtypes = [c_uint32]
 
 
+def readSamples(hackrf_transfer):
+    """
+    Callback used to read back samples.
+    """
+
+    addr = cast(hackrf_transfer.contents.hackrf_device, c_void_p)
+
+    obj = _hackrfDict.get(addr.value, None)
+    if obj is None:
+        logger.error("Failed to find HackRF device @ 0x%x." % addr.value)
+        return 0
+
+    arrayType = (c_byte * hackrf_transfer.contents.valid_length)
+    values = cast(hackrf_transfer.contents.buffer, POINTER(arrayType)).contents
+    iq = np.empty(len(values)//2, 'complex')
+    iq.real, iq.imag = values[::2], values[1::2]
+    iq /= 128.0
+
+    for samp in iq:
+        obj._rxQueue.put(samp)
+
+    return 0
+
 class HackRf(object):
     __JELLYBEAN__ = 'Jellybean'
     __JAWBREAKER__ = 'Jawbreaker'
@@ -357,6 +385,10 @@ class HackRf(object):
         self.device = POINTER(hackrf_device)()
         self.callback = None
         self.is_open = False
+
+        # Setup RX / TX FIFOs.
+        self._rxQueue = Queue()
+        self._txQueue = Queue()
 
         if setup:
             ret = self.setup()
@@ -406,11 +438,15 @@ class HackRf(object):
             return HackRfError.HACKRF_SUCCESS
 
         ret = libhackrf.hackrf_open(self.device)
+
         if ret == HackRfError.HACKRF_SUCCESS:
             self.is_open = True
-            logger.debug('Successfully opened HackRf device.')
+            # Save reference.
+            addr = cast(self.device, c_void_p)
+            _hackrfDict[addr.value] = self
+            logger.debug('Successfully opened HackRF device.')
         else:
-            logger.error('No Hack Rf Detected (%d)!' % ret)
+            logger.error('No HackRF Detected (%d)!' % ret)
 
         return ret
 
@@ -427,7 +463,7 @@ class HackRf(object):
         ret = libhackrf.hackrf_close(self.device)
         if ret == HackRfError.HACKRF_SUCCESS:
             self.is_open = False
-            logger.debug('Successfully closed HackRf device.')
+            logger.debug('Successfully closed HackRF device.')
         else:
             logger.error('Failed to close!')
 
@@ -450,15 +486,15 @@ class HackRf(object):
             Status code from 'libhackrf'.
         """
         if not self.is_open:
-            logger.error("HackRf not opened.")
+            logger.error("HackRF not opened.")
             return HackRfError.HACKRF_ERROR
 
         self.callback = _hackrf_callback(set_callback)
         ret = libhackrf.hackrf_start_rx(self.device, self.callback, obj)
         if ret == HackRfError.HACKRF_SUCCESS:
-            logger.debug('Successfully started HackRf in Receive Mode.')
+            logger.debug('Successfully started HackRF in Receive Mode.')
         else:
-            logger.error('Failed to start HackRf in Receive Mode.')
+            logger.error('Failed to start HackRF in Receive Mode.')
 
         return ret
 
@@ -470,14 +506,14 @@ class HackRf(object):
             Status code from 'libhackrf'.
         """
         if not self.is_open:
-            logger.error("HackRf not opened.")
+            logger.error("HackRF not opened.")
             return HackRfError.HACKRF_ERROR
 
         ret = libhackrf.hackrf_stop_rx(self.device)
         if ret == HackRfError.HACKRF_SUCCESS:
-            logger.debug('Successfully stop HackRf in Recieve Mode')
+            logger.debug('Successfully stopped HackRF in Receive Mode')
         else:
-            logger.error('Failed to stop HackRf in Recieve Mode')
+            logger.error('Failed to stop HackRF in Receive Mode')
 
         return ret
 
@@ -496,15 +532,15 @@ class HackRf(object):
             Status code from 'libhackrf'.
         """
         if not self.is_open:
-            logger.error("HackRf not opened.")
+            logger.error("HackRF not opened.")
             return HackRfError.HACKRF_ERROR
 
         self.callback = _hackrf_callback(set_callback)
         ret =  libhackrf.hackrf_start_tx(self.device, self.callback, None)
         if ret == HackRfError.HACKRF_SUCCESS:
-            logger.debug('Successfully start HackRf in Transfer Mode')
+            logger.debug('Successfully start HackRF in Transfer Mode')
         else:
-            logger.error('Failed to start HackRf in Transfer Mode')
+            logger.error('Failed to start HackRF in Transfer Mode')
 
         return ret
 
@@ -516,15 +552,15 @@ class HackRf(object):
             Status code from 'libhackrf'.
         """
         if not self.is_open:
-            logger.error("HackRf not opened.")
+            logger.error("HackRF not opened.")
             return HackRfError.HACKRF_ERROR
 
 
         ret = libhackrf.hackrf_stop_tx(self.device)
         if ret == HackRfError.HACKRF_SUCCESS:
-            logger.debug('Successfully stop HackRf in Transfer Mode')
+            logger.debug('Successfully stopped HackRF in Transfer Mode')
         else:
-            logger.error('Failed to stop HackRf in Transfer Mode')
+            logger.error('Failed to stop HackRF in Transfer Mode')
 
         return ret
 
@@ -536,7 +572,7 @@ class HackRf(object):
             Retrieved board ID (-1 on failure).
         """
         if not self.is_open:
-            logger.error("HackRf not opened.")
+            logger.error("HackRF not opened.")
             return None
 
         value = c_uint8()
@@ -556,14 +592,14 @@ class HackRf(object):
             Retrieved version string ('None' on failure).
         """
         if not self.is_open:
-            logger.error("HackRf not opened.")
+            logger.error("HackRF not opened.")
             return None
 
         version = create_string_buffer(20)
         lenth = c_uint8(20)
         ret = libhackrf.hackrf_version_string_read(self.device, version, lenth)
         if ret == HackRfError.HACKRF_SUCCESS:
-            logger.debug('Successfully got HackRf Version String')
+            logger.debug('Successfully got HackRF Version String')
             return version.value
 
         logger.error('Failed to get Version String')
@@ -582,7 +618,7 @@ class HackRf(object):
              Status code from 'libhackrf'.
         """
         if not self.is_open:
-            logger.error("HackRf not opened.")
+            logger.error("HackRF not opened.")
             return HackRfError.HACKRF_ERROR
 
         try:
@@ -608,7 +644,7 @@ class HackRf(object):
             Boolean indicating the device is streaming streaming.
         """
         if not self.is_open:
-            logger.error("HackRf not opened.")
+            logger.error("HackRF not opened.")
             return False
 
         ret = libhackrf.hackrf_is_streaming(self.device)
@@ -627,7 +663,7 @@ class HackRf(object):
               Status code from 'libhackrf'.
         """
         if not self.is_open:
-            logger.error("HackRf not opened.")
+            logger.error("HackRF not opened.")
             return HackRfError.HACKRF_ERROR
 
         # Convert to integer.
@@ -660,7 +696,7 @@ class HackRf(object):
             Status code from 'libhackrf'.
         """
         if not self.is_open:
-            logger.error("HackRf not opened.")
+            logger.error("HackRF not opened.")
             return HackRfError.HACKRF_ERROR
 
         # Convert to integer.
@@ -693,7 +729,7 @@ class HackRf(object):
             Status code from 'libhackrf'.
         """
         if not self.is_open:
-            logger.error("HackRf not opened.")
+            logger.error("HackRF not opened.")
             return HackRfError.HACKRF_ERROR
 
         # Convert to integer.
@@ -722,7 +758,7 @@ class HackRf(object):
             Status code from 'libhackrf'.
         """
         if not self.is_open:
-            logger.error("HackRf not opened.")
+            logger.error("HackRF not opened.")
             return HackRfError.HACKRF_ERROR
 
         val = int(enable)
@@ -748,7 +784,7 @@ class HackRf(object):
             Example:    (HackRfError.HACKRF_SUCCESS, 8e6)
         """
         if not self.is_open:
-            logger.error("HackRf not opened.")
+            logger.error("HackRF not opened.")
             return HackRfError.HACKRF_ERROR
 
         # Convert to integer.
@@ -777,7 +813,7 @@ class HackRf(object):
              Status code from 'libhackrf'.
         """
         if not self.is_open:
-            logger.error("HackRf not opened.")
+            logger.error("HackRF not opened.")
             return HackRfError.HACKRF_ERROR
 
         value = int(enable)
@@ -803,7 +839,7 @@ class HackRf(object):
              Status code from 'libhackrf'.
         """
         if not self.is_open:
-            logger.error("HackRf not opened.")
+            logger.error("HackRF not opened.")
             return HackRfError.HACKRF_ERROR
 
         # Convert to integer.
@@ -914,3 +950,19 @@ class HackRf(object):
         iq.real, iq.imag = bytes2[::2], bytes2[1::2]
         iq /= 128.0
         return iq
+
+    def readSamples(self, duration=1.0):
+        """
+        Read samples for specified duration (in seconds).
+
+        Args:
+            duration (float): Number of seconds to collect samples for (default = 1).
+
+        Returns:
+            A 'Queue' object containing all the collected samples.
+        """
+        self.start_rx_mode(readSamples)
+        time.sleep(duration)
+        self.stop_rx_mode()
+
+        return self._rxQueue

@@ -105,7 +105,7 @@ class HackRfCLT(cmd.Cmd):
         if self.hackrf.is_streaming():
             self.hackrf.stop_rx_mode()
 
-        self._freq      = 10e6
+        self._freq      = 93.1e6
         self._rate      = 1e6
         self._lnaGain   = 0.0
         self._vgaGain   = 0.0
@@ -603,6 +603,80 @@ class HackRfCLT(cmd.Cmd):
         plt.axis([min(f), max(f), min(Ylog), max(Ylog)])
         plt.grid(1, color='w')
         plt.show()
+
+    def do_snapshot(self, line):
+        """
+        Take a snapshot in time using current configuration.
+
+            snapshot <time>
+
+        Args:
+            time (float): Number of seconds over which to collect samples (<60) (default = 1).
+        """
+
+        args = self.__parseLine(line)
+        if len(args) == 0:
+            # Default time.
+            timeDur = 1.0
+        elif len(args) > 1:
+            logger.warning("Incorrect number of arguments (0 or 1 argument required).")
+            return
+        else:
+            # User-defined time.
+            timeDur = self.__convertFloat(args[0])
+            if (timeDur <= 0) or (timeDur > 60):
+                logger.error("Duration must be > 0 and <= 60 seconds.")
+                return
+
+        self.__printline("Starting snapshot (%.3f [sec])..." % timeDur)
+
+        rxQueue = self.hackrf.readSamples(timeDur)
+
+        if rxQueue.qsize() == 0:
+            logger.warning("No snapshot was taken.")
+            return
+
+        numSamps = rxQueue.qsize()
+
+        t = np.arange(0, numSamps) * (1.0/self._rate)
+        x = np.zeros(len(t), dtype=complex)
+        n = 0
+        while not rxQueue.empty():
+            x[n] = rxQueue.get(block=True, timeout=1)
+            n += 1
+
+        try:
+            import matplotlib
+            import matplotlib.pyplot as plt
+        except Exception as e:
+            logger.error("Failed to import \'matplotlib.pyplot\', skipping plots...")
+            return
+
+        plt.figure()
+        ax = plt.gca()
+        versArr = [int(v) for v in matplotlib.__version__.split(".")]
+        if versArr[0] >= 2:
+            ax.set_facecolor('k')
+        else:
+            ax.set_axis_bgcolor('k')
+
+        plt.subplot(1,2,1)
+        plt.plot(t, np.imag(x), 'g--')
+        plt.plot(t, np.real(x), 'g')
+        plt.title("Time Snapshot")
+        plt.xlabel("Time [sec]")
+        plt.ylabel("Amplitude")
+        plt.grid(1, color='w')
+
+        plt.subplot(1,2,2)
+        plt.plot(np.real(x), np.imag(x), 'g-o')
+        plt.title("Constellation")
+        plt.xlabel("Re{x[n]}")
+        plt.ylabel("Im{x[n]}")
+        plt.grid(1, color='w')
+
+        plt.show()
+
 
 
 
