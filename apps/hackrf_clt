@@ -8,6 +8,7 @@ import numpy as np
 
 from threading import Thread
 
+import os
 import time
 import ctypes
 import signal
@@ -43,6 +44,41 @@ def callback_power_measurement(hackrf_transfer):
 
     return 0
 
+
+MAX_FFT_SIZE = 16384
+
+class SpectrumSnapshot(ctypes.Structure):
+    _fields_ = \
+        [
+            ("buffer", ctypes.c_float*MAX_FFT_SIZE),
+            ("nfft", ctypes.c_uint),
+            ("count", ctypes.c_uint),
+            ("window", ctypes.c_float*MAX_FFT_SIZE),
+        ]
+
+
+def callback_spectrum_snapshot(hackrf_transfer):
+    arrayType = (ctypes.c_byte * hackrf_transfer.contents.valid_length)
+    values = ctypes.cast(hackrf_transfer.contents.buffer, ctypes.POINTER(arrayType)).contents
+    iq = np.empty(len(values)//2, 'complex')
+    iq.real, iq.imag = values[::2], values[1::2]
+    iq /= 128.0
+
+    snap = ctypes.cast(hackrf_transfer.contents.rx_ctx, ctypes.POINTER(SpectrumSnapshot))
+
+    nfft = snap.contents.nfft
+
+    for k in range(0, len(iq), nfft):
+        nBlock = min([len(iq)-k, nfft])
+        chunk  = iq[k : k+nBlock]
+        chunk  = [snap.contents.window[m]*iq[m] for m in range(nBlock)]
+        Y      = np.fft.fftshift(np.abs(np.fft.fft(chunk, nfft)))
+        for n in range(nfft):
+            snap.contents.buffer[n] += float(Y[n])
+
+        snap.contents.count += 1
+
+    return 0
 
 class HackRfCLT(cmd.Cmd):
     def preloop(self):
@@ -119,13 +155,46 @@ class HackRfCLT(cmd.Cmd):
 
         return value
 
+    def __convertInt(self, line):
+        """
+        Convert to an integer.
+        """
+        try:
+            value = int(line)
+        except Exception as e:
+            logger.error("Failed to convert to integer.")
+            value = -1
+
+        return value
+
     def __printline(self, line):
         """
         Private print function.
         """
         print "    %s" % line
 
-    ############################################################
+    #############################################################
+    # Command line functions.
+    #############################################################
+
+    def do_clear(self, line):
+        """
+        Clear current terminal text.
+
+            clear
+        """
+        os.system("clear")
+
+    def do_ls(self, line):
+        """
+        Passthrough for 'ls' function (Linux).
+
+            ls [options]
+        """
+        line = line.rstrip(" ").lstrip(" ")
+        os.system("ls %s" % line)
+        
+    #############################################################
     # Control functions.
     #############################################################
 
@@ -373,7 +442,19 @@ class HackRfCLT(cmd.Cmd):
         print ("   RX VGA Gain:    %.1f [dB]" % (self._vgaGain))
         print ("   TX VGA Gain:    %.1f [dB]" % (self._txVgaGain))
 
-    ############################################################
+    #############################################################
+    # Utility functions.
+    #############################################################
+
+    def do_set_max_lna(self, line):
+        """
+        Set LNA to maximum available gain (40 dB).
+
+            set_max_lna
+        """
+        self.do_set_lna_gain("40")
+
+    #############################################################
     # Test functions.
     #############################################################
 
@@ -409,11 +490,101 @@ class HackRfCLT(cmd.Cmd):
 
         # Allow callback to run for 'N' seconds.
         time.sleep(timeDur)
+        self.hackrf.stop_rx_mode()
+
         # Compute average power.
         avgPower = powerMeas.value / powerMeas.count
 
         self.__printline("Power: %.3f [dB] (%u [meas])" % (10*np.log10(avgPower), powerMeas.count))
+
+    def do_spectrum_snapshot(self, line):
+        """
+        Take a snapshot of the current spectrum.
+
+            spectrum_snapshot <time> <fft_size> <window type>
+
+        Args:
+            time (float): Number of seconds over which to perform measurement (<60) (default = 3).
+            fft_size (int): Size of the snapshot FFT (dictates frequency resolution).
+            window (str): Type of window to apply to the periodogram (['ones', 'hamming']).
+        """
+        TIME_DFLT = 3
+        NFFT_DFLT = 2048
+        WIND_DFLT = "Hamming"
+
+
+        args = self.__parseLine(line)
+        if len(args) == 0:
+            # Default time, FFT size, and window type.
+            timeDur  = TIME_DFLT
+            nfft     = NFFT_DFLT
+            windType = WIND_DFLT
+        if len(args) >= 1:
+            # Time only.
+            timeDur = self.__convertFloat(args[0])
+            if (timeDur <= 0) or (timeDur > 60):
+                logger.error("Duration must be > 0 and <= 60 seconds.")
+                return
+            nfft    = NFFT_DFLT
+            windType = WIND_DFLT
+        if len(args) >= 2:
+            nfft    = self.__convertInt(args[1])
+            if nfft <= 0:
+                logger.error("Failed to set FFT size (%d)." % nfft)
+                return
+            windType = WIND_DFLT
+        if len(args) == 3:
+            windType = str(args[2]).lower()
+        if len(args) > 3:
+            logger.error("Too many arguments (0 to 3 expected).")
+            return
+
+        if windType == "ones":
+            window = np.ones(nfft)
+            windType = "Ones"
+        else:
+            window = np.hamming(nfft)
+
+        self.__printline("Starting spectrum snapshot (%.2f [sec], FFT size: %d, Window: %s)..." %
+                         (timeDur, nfft, windType))
+        snap = SpectrumSnapshot()
+        snap.nfft  = nfft
+        snap.count = 0
+        for n in range(snap.nfft):
+            snap.buffer[n] = 0
+            snap.window[n] = window[n]
+
+        self.hackrf.start_rx_mode(callback_spectrum_snapshot,
+                                  obj=ctypes.cast(ctypes.byref(snap), ctypes.c_void_p))
+
+        # Allow callback to run for 'N' seconds.
+        time.sleep(timeDur)
         self.hackrf.stop_rx_mode()
+
+        try:
+            import matplotlib.pyplot as plt
+        except Exception as e:
+            logger.error("Failed to import \'matplotlib.pyplot\', skipping plots...")
+            return
+
+        G  = 1.0 / (snap.count*snap.nfft)
+        Fs = self._rate
+        f  = (np.linspace(-Fs/2.0, Fs/2.0, snap.nfft) + self._freq) * 1e-6
+        Y  = [snap.buffer[n]*G for n in range(snap.nfft)]
+        Ylog = 20*np.log10(np.abs(Y))
+
+        plt.figure()
+        ax = plt.gca()
+        ax.set_axis_bgcolor('k')
+        plt.plot(f, Ylog, 'g')
+        plt.title("Spectrum Snapshot")
+        plt.xlabel("Frequency [MHz]")
+        plt.ylabel("Amplitude [dB]")
+        plt.axis([min(f), max(f), min(Ylog), max(Ylog)])
+        plt.grid(1, color='w')
+        plt.show()
+
+
 
 if __name__ == "__main__":
 
