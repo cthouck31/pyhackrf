@@ -8,7 +8,7 @@ import subprocess
 __NAME__    = 'pyhackrf'
 __VERSION__ = '1.0.1'
 __DIR__     = os.path.dirname(os.path.abspath(__file__)).rstrip('/')
-__REQS__    = []
+__REQS__    = ['numpy']
 
 __PKG_REQS__ =\
     [
@@ -16,7 +16,8 @@ __PKG_REQS__ =\
         'cmake',
         'libusb-1.0-0-dev',
         'pkg-config',
-        'libfftw3-dev'
+        'libfftw3-dev',
+	'python-dev'
     ]
 
 __SCRIPTS__ =\

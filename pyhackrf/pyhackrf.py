@@ -808,7 +808,7 @@ class HackRf(object):
 
         # Convert to integer.
         try:
-            bwHz = int(rate+0.5)
+            bwHz = int(bw_hz+0.5)
         except Exception as e:
             logger.error("Failed to convert to integer: %s." % str(e))
             return HackRfError.HACKRF_ERROR

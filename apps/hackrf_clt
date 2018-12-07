@@ -91,7 +91,10 @@ class HackRfCLT(cmd.Cmd):
         self.hackrf.exit()
 
     def default(self, line):
-        pass
+        if line.replace(" ","") == "":
+            pass
+        else:
+            logger.warning("\'%s\' not implemented." % line)
 
     def reset(self):
         """
@@ -187,7 +190,7 @@ class HackRfCLT(cmd.Cmd):
 
     def do_ls(self, line):
         """
-        Passthrough for 'ls' function (Linux).
+        Passthrough for 'ls' function.
 
             ls [options]
         """
@@ -492,6 +495,10 @@ class HackRfCLT(cmd.Cmd):
         time.sleep(timeDur)
         self.hackrf.stop_rx_mode()
 
+        if powerMeas.count == 0:
+            logger.error("No snapshots were taken.")
+            return
+
         # Compute average power.
         avgPower = powerMeas.value / powerMeas.count
 
@@ -545,6 +552,10 @@ class HackRfCLT(cmd.Cmd):
         else:
             window = np.hamming(nfft)
 
+        if nfft <= 0:
+            logger.error("FFT size must be >= 1")
+            return
+
         self.__printline("Starting spectrum snapshot (%.2f [sec], FFT size: %d, Window: %s)..." %
                          (timeDur, nfft, windType))
         snap = SpectrumSnapshot()
@@ -562,9 +573,14 @@ class HackRfCLT(cmd.Cmd):
         self.hackrf.stop_rx_mode()
 
         try:
+            import matplotlib
             import matplotlib.pyplot as plt
         except Exception as e:
             logger.error("Failed to import \'matplotlib.pyplot\', skipping plots...")
+            return
+
+        if snap.count == 0:
+            logger.warning("No snapshots were taken.")
             return
 
         G  = 1.0 / (snap.count*snap.nfft)
@@ -575,7 +591,11 @@ class HackRfCLT(cmd.Cmd):
 
         plt.figure()
         ax = plt.gca()
-        ax.set_axis_bgcolor('k')
+        versArr = [int(v) for v in matplotlib.__version__.split(".")]
+        if versArr[0] >= 2:
+            ax.set_facecolor('k')
+        else:
+            ax.set_axis_bgcolor('k')
         plt.plot(f, Ylog, 'g')
         plt.title("Spectrum Snapshot")
         plt.xlabel("Frequency [MHz]")
