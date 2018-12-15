@@ -369,6 +369,51 @@ def readSamples(hackrf_transfer):
 
     return 0
 
+
+def sendSamples(hackrf_transfer):
+    """
+    Callback used to send back samples.
+    """
+
+    addr = cast(hackrf_transfer.contents.hackrf_device, c_void_p)
+
+    obj = _hackrfDict.get(addr.value, None)
+    if obj is None:
+        logger.error("Failed to find HackRF device @ 0x%x." % addr.value)
+        return 0
+
+    N     = hackrf_transfer.contents.valid_length
+    queue = obj._txQueue
+
+    idx = 0
+    while (queue.qsize() > 0) and (N > 0):
+        xi  = queue.get(block=True, timeout=1)
+        xqi_re = int(xi.real*128)
+        xqi_im = int(xi.imag*128)
+
+        xqi_re =  127 if (xqi_re >  127) else xqi_re
+        xqi_re = -128 if (xqi_re < -128) else xqi_re
+        xqi_im =  127 if (xqi_im >  127) else xqi_im
+        xqi_im = -128 if (xqi_im < -128) else xqi_im
+
+        hackrf_transfer.contents.buffer[idx  ] = xqi_re
+        hackrf_transfer.contents.buffer[idx+1] = xqi_im
+
+        idx += 2
+        N   -= 2
+
+    while N > 0:
+        hackrf_transfer.contents.buffer[idx  ] = 0
+        hackrf_transfer.contents.buffer[idx+1] = 0
+        idx += 2
+        N   -= 2
+
+    if queue.qsize() == 0:
+        return -1
+
+    return 0
+
+
 class HackRf(object):
     __JELLYBEAN__ = 'Jellybean'
     __JAWBREAKER__ = 'Jawbreaker'
@@ -966,3 +1011,24 @@ class HackRf(object):
         self.stop_rx_mode()
 
         return self._rxQueue
+
+    def sendSamples(self, samples):
+        """
+        Send list of samples.
+
+        Args:
+            samples (complex list): List of complex-valued samples to transmit.
+
+        Returns:
+            Number of samples sent.
+        """
+
+        for samp in samples:
+            self._txQueue.put(samp)
+
+        print self._txQueue.qsize()
+
+        self.start_tx_mode(sendSamples)
+        while not self._txQueue.empty():
+            time.sleep(0.01)
+        self.stop_tx_mode()

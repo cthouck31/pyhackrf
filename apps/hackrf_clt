@@ -677,6 +677,51 @@ class HackRfCLT(cmd.Cmd):
 
         plt.show()
 
+    def do_send_tone(self, line):
+        """
+        Send a test tone for a specific duration.
+
+	    send_tone <freq> <duration>
+
+        Args:
+	    freq (float): Frequency of tone to transmit.
+	    duration (float): Duration of test tone (in seconds).
+        """
+        args = self.__parseLine(line)
+
+        freq     = 0.0
+	duration = 3.0
+
+        if len(args) >= 1:
+	    value = self.__convertFloat(args[0])
+	    if value:
+                freq = value
+            else:
+                logger.error("Failed to parse frequency.")
+	        return
+
+        if len(args) == 2:
+            value = self.__convertFloat(args[1])
+            if value >= 0:
+                duration = value
+            else:
+                logger.error("Failed to parse duration.")
+                return
+
+        else:
+            logger.error("Incorrect number of arguments.")
+            return
+
+        if abs(freq) > self._rate / 2.:
+	    logger.error("Requested frequency violates Nyquist (%.3f > %.3f)." %
+	        (abs(freq), self._rate/2.))
+	    return
+
+        N = int(duration * float(self._rate))
+        x = np.exp(1j*2*np.pi*(freq/self._rate)*np.arange(N))
+
+	logger.info("Sending test tone...")
+        self.hackrf.sendSamples(x)
 
 
 
